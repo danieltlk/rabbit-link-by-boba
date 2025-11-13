@@ -1,8 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using RabbitLink.Builders;
 using RabbitLink.Connection;
 using RabbitLink.Internals;
@@ -16,6 +11,12 @@ using RabbitLink.Topology;
 using RabbitLink.Topology.Internal;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using static System.Collections.Specialized.BitVector32;
 
 namespace RabbitLink.Consumer
 {
@@ -36,7 +37,7 @@ namespace RabbitLink.Consumer
         private readonly CompositeChannel<LinkConsumerMessageAction> _actionQueue =
             new(new LensChannel<LinkConsumerMessageAction>());
 
-        private volatile EventingBasicConsumer _consumer;
+        private volatile AsyncEventingBasicConsumer _consumer;
         private volatile CancellationTokenSource _consumerCancellationTokenSource;
 
         private readonly string _appId;
@@ -323,10 +324,10 @@ namespace RabbitLink.Consumer
 
             _consumerCancellationTokenSource = new CancellationTokenSource();
 
-            _consumer = new EventingBasicConsumer(model);
-            _consumer.Received += ConsumerOnReceived;
-            _consumer.Registered += ConsumerOnRegistered;
-            _consumer.ConsumerCancelled += ConsumerOnConsumerCancelled;
+            _consumer = new AsyncEventingBasicConsumer(model);
+            _consumer.Received += ConsumerOnReceivedAsync;
+            _consumer.Registered += ConsumerOnRegisteredAsync;
+            _consumer.ConsumerCancelled += ConsumerOnConsumerCancelledAsync;
 
             cancellation.ThrowIfCancellationRequested();
 
@@ -349,25 +350,28 @@ namespace RabbitLink.Consumer
             model.BasicConsume(_queue.Name, AutoAck, consumerTag, false, Exclusive, options, _consumer);
         }
 
-        private void ConsumerOnRegistered(object sender, ConsumerEventArgs e)
-            => _logger.Debug($"Consuming: {string.Join(", ", e.ConsumerTags)}");
+        private Task ConsumerOnRegisteredAsync(object sender, ConsumerEventArgs @event)
+        {
+            _logger.Debug($"Consuming: {string.Join(", ", @event.ConsumerTags)}");
 
+            return Task.CompletedTask;
+        }
 
-        private void ConsumerOnReceived(object sender, BasicDeliverEventArgs e)
+        private async Task ConsumerOnReceivedAsync(object sender, BasicDeliverEventArgs @event)
         {
             try
             {
                 var props = new LinkMessageProperties();
-                props.Extend(e.BasicProperties);
+                props.Extend(@event.BasicProperties);
 
-                var receiveProps = new LinkReceiveProperties(e.Redelivered, e.Exchange, e.RoutingKey, _queue.Name,
+                var receiveProps = new LinkReceiveProperties(@event.Redelivered, @event.Exchange, @event.RoutingKey, _queue.Name,
                     props.AppId == _appId);
 
                 var token = _consumerCancellationTokenSource.Token;
 
-                var msg = new LinkConsumedMessage<byte[]>(e.Body.ToArray(), props, receiveProps, token);
+                var msg = new LinkConsumedMessage<byte[]>(@event.Body.ToArray(), props, receiveProps, token);
 
-                HandleMessageAsync(msg, e.DeliveryTag);
+               await HandleMessageAsync(msg, @event.DeliveryTag);
             }
             catch (Exception ex)
             {
@@ -375,8 +379,8 @@ namespace RabbitLink.Consumer
 
                 try
                 {
-                    _actionQueue.Put(new LinkConsumerMessageAction(
-                        e.DeliveryTag,
+                    await _actionQueue.PutAsync(new LinkConsumerMessageAction(
+                        @event.DeliveryTag,
                         LinkConsumerAckStrategy.Nack,
                         _consumerCancellationTokenSource.Token)
                     );
@@ -388,94 +392,66 @@ namespace RabbitLink.Consumer
             }
         }
 
-        private void HandleMessageAsync(LinkConsumedMessage<byte[]> msg, ulong deliveryTag)
+        private async Task HandleMessageAsync(LinkConsumedMessage<byte[]> msg, ulong deliveryTag)
         {
             var cancellation = msg.Cancellation;
 
-            Task<LinkConsumerAckStrategy> task;
+            LinkConsumerMessageAction action;
 
             try
             {
-                task = _configuration.MessageHandler(msg);
+                var ackStrategy = await _configuration.MessageHandler(msg);
+
+                if (AutoAck)
+                    return;
+
+                action = new LinkConsumerMessageAction(deliveryTag, ackStrategy, cancellation);
+
+            }
+            catch (TaskCanceledException)
+            {
+                try
+                {
+                    var strategy = _configuration.ErrorStrategy.HandleCancellation();
+                    action = new LinkConsumerMessageAction(deliveryTag, strategy, cancellation);
+
+                    _logger.Warning($"MessageHandler cancelled (strategy: {action.Strategy})");
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warning($"Error in ErrorStrategy for Cancellation, NACKing: {ex}");
+                    action = new LinkConsumerMessageAction(deliveryTag, LinkConsumerAckStrategy.Nack,
+                        cancellation);
+                }
             }
             catch (Exception ex)
             {
-                task = Task.FromException<LinkConsumerAckStrategy>(ex);
-            }
-
-            task.ContinueWith(
-                t => OnMessageHandledAsync(t, deliveryTag, cancellation),
-                cancellation,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Current
-            );
-        }
-
-        private async Task OnMessageHandledAsync(Task<LinkConsumerAckStrategy> task, ulong deliveryTag,
-            CancellationToken cancellation)
-        {
-            if (AutoAck) return;
-
-            try
-            {
-                LinkConsumerMessageAction action;
-
-                switch (task.Status)
+                try
                 {
-                    case TaskStatus.RanToCompletion:
-                        action = new LinkConsumerMessageAction(deliveryTag, task.Result, cancellation);
-                        break;
-                    case TaskStatus.Faulted:
-                        try
-                        {
-                            var taskEx = task.Exception.GetBaseException();
-                            var strategy = _configuration.ErrorStrategy.HandleError(taskEx);
-                            action = new LinkConsumerMessageAction(deliveryTag, strategy, cancellation);
+                    var strategy = _configuration.ErrorStrategy.HandleError(ex);
+                    action = new LinkConsumerMessageAction(deliveryTag, strategy, cancellation);
 
-                            _logger.Warning($"Error in MessageHandler (strategy: {action.Strategy}): {taskEx}");
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.Warning($"Error in ErrorStrategy for Error, NACKing: {ex}");
-                            action = new LinkConsumerMessageAction(deliveryTag, LinkConsumerAckStrategy.Nack,
-                                cancellation);
-                        }
-
-                        break;
-                    case TaskStatus.Canceled:
-                        try
-                        {
-                            var strategy = _configuration.ErrorStrategy.HandleCancellation();
-                            action = new LinkConsumerMessageAction(deliveryTag, strategy, cancellation);
-
-                            _logger.Warning($"MessageHandler cancelled (strategy: {action.Strategy})");
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.Warning($"Error in ErrorStrategy for Cancellation, NACKing: {ex}");
-                            action = new LinkConsumerMessageAction(deliveryTag, LinkConsumerAckStrategy.Nack,
-                                cancellation);
-                        }
-
-                        break;
-                    default:
-                        return;
+                    _logger.Warning($"Error in MessageHandler (strategy: {action.Strategy}): {ex}");
                 }
+                
+                catch (Exception e)
+                {
+                    _logger.Warning($"Error in ErrorStrategy for Error, NACKing: {e}");
+                    action = new LinkConsumerMessageAction(deliveryTag, LinkConsumerAckStrategy.Nack,
+                        cancellation);
+                }
+            }
 
-                await _actionQueue.PutAsync(action)
-                    .ConfigureAwait(false);
-            }
-            catch
-            {
-                //no-op
-            }
+            await _actionQueue.PutAsync(action).ConfigureAwait(false);
         }
 
-        private void ConsumerOnConsumerCancelled(object sender, ConsumerEventArgs e)
+        private Task ConsumerOnConsumerCancelledAsync(object sender, ConsumerEventArgs @event)
         {
-            _logger.Debug($"Cancelled: {string.Join(", ", e.ConsumerTags)}");
+            _logger.Debug($"Cancelled: {string.Join(", ", @event.ConsumerTags)}");
             _consumerCancellationTokenSource?.Cancel();
             _consumerCancellationTokenSource?.Dispose();
+
+            return Task.CompletedTask;
         }
 
         private void Stop(IModel model)
