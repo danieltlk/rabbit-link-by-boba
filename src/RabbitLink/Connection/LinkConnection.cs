@@ -347,7 +347,7 @@ namespace RabbitLink.Connection
                         }
                         catch (Exception ex)
                         {
-                            _storage.PutRetry(new[] {item}, CancellationToken.None);
+                            _storage.PutRetry(new[] { item }, CancellationToken.None);
                             _logger.Error($"Cannot create model: {ex.Message}");
                             throw;
                         }
@@ -379,7 +379,7 @@ namespace RabbitLink.Connection
 
         private void ConnectionOnConnectionShutdown(object sender, ShutdownEventArgs e)
         {
-            _logger.Info($"Disconnected, Initiator: {e.Initiator}, Code: {e.ReplyCode}, Message: {e.ReplyText}");
+            _logger.Info($"Disconnected: {e}");
 
             // if initialized by application, exit
             if (e.Initiator == ShutdownInitiator.Application) return;

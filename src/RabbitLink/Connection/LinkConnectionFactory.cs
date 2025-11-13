@@ -1,4 +1,4 @@
-﻿#region Usings
+#region Usings
 
 using System;
 using System.Collections.Generic;
@@ -41,21 +41,26 @@ namespace RabbitLink.Connection
             _factory = new ConnectionFactory
             {
                 Uri = connectionString ?? throw new ArgumentNullException(nameof(connectionString)),
-                TopologyRecoveryEnabled = false,
-                AutomaticRecoveryEnabled = false,
                 UseBackgroundThreadsForIO = useBackgroundThreads,
                 RequestedConnectionTimeout = timeout,
                 ClientProperties =
                 {
-                    ["product"] = "RabbitLink",
+                    ["product"] = "BibaRabbitLink",
                     ["version"] = GetType().GetTypeInfo().Assembly.GetName().Version.ToString(3),
-                    ["copyright"] = "Copyright (c) 2015-2017 RabbitLink",
-                    ["information"] = "https://github.com/rabbit-link/rabbit-link",
+                    ["copyright"] = "Copyright (c) 2025 BobaRabbitLink",
+                    ["information"] = "https://github.com/danieltlk/rabbit-link-by-boba",
                     ["app_id"] = appId
-                }
+                },
+                AutomaticRecoveryEnabled = true,
+                NetworkRecoveryInterval = TimeSpan.FromSeconds(10),
+                TopologyRecoveryEnabled = true,
+                RequestedHeartbeat = TimeSpan.FromSeconds(60),
+                DispatchConsumersAsync = true,
+                SocketReadTimeout = TimeSpan.FromSeconds(15),
+                SocketWriteTimeout = TimeSpan.FromSeconds(15),
             };
 
-            _hostNames = new List<string> {_factory.HostName};
+            _hostNames = new List<string> { _factory.HostName };
         }
 
         #endregion

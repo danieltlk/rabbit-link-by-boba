@@ -337,7 +337,7 @@ namespace RabbitLink.Connection
 
         private void ModelOnModelShutdown(object sender, ShutdownEventArgs e)
         {
-            _logger.Info($"Shutdown, Initiator: {e.Initiator}, Code: {e.ReplyCode}, Message: {e.ReplyText}");
+            _logger.Info($"Shutdown: {e}");
 
             if (e.Initiator == ShutdownInitiator.Application) return;
 
