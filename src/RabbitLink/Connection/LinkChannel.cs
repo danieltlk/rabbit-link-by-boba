@@ -58,6 +58,7 @@ namespace RabbitLink.Connection
             _disposeCancellation = _disposeCts.Token;
 
             _connection.Disposed += ConnectionOnDisposed;
+            _connection.Disconnected += ConnectionOnDisconnected;
 
             _logger.Debug($"Created(connectionId: {_connection.Id:D})");
         }
@@ -91,6 +92,7 @@ namespace RabbitLink.Connection
                 }
 
                 _connection.Disposed -= ConnectionOnDisposed;
+                _connection.Disconnected -= ConnectionOnDisconnected;
                 ChangeState(LinkChannelState.Disposed);
 
                 Disposed?.Invoke(this, EventArgs.Empty);
@@ -309,6 +311,22 @@ namespace RabbitLink.Connection
 
         private void ConnectionOnDisposed(object sender, EventArgs eventArgs)
             => Dispose(true);
+
+        private void ConnectionOnDisconnected(object sender, EventArgs eventArgs)
+        {
+            // Model can't outlive its connection: the connection closes it as Application,
+            // which ModelOnModelShutdown ignores, so reopen here
+            _logger.Info("Connection lost, reopening model");
+
+            try
+            {
+                _modelActiveCts?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // model is already being stopped
+            }
+        }
 
 
         private void ModelOnBasicReturn(object sender, BasicReturnEventArgs e)

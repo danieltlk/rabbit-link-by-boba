@@ -383,6 +383,17 @@ namespace RabbitLink.Producer
                 var seq = model.NextPublishSeqNo;
                 var corellationId = _ackQueue.Add(message, seq);
 
+                // Message is out of _messageQueue, so its cancellation (PublishTimeout) is only observed here
+                var cancellationRegistration = message.Cancellation.Register(
+                    () => _ackQueue.Cancel(corellationId)
+                );
+                message.Completion.ContinueWith(
+                    _ => cancellationRegistration.Dispose(),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default
+                );
+
                 var properties = model.CreateBasicProperties();
                 properties.Extend(message.Properties);
 

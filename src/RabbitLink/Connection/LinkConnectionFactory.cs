@@ -51,9 +51,10 @@ namespace RabbitLink.Connection
                     ["information"] = "https://github.com/danieltlk/rabbit-link-by-boba",
                     ["app_id"] = appId
                 },
-                AutomaticRecoveryEnabled = true,
-                NetworkRecoveryInterval = TimeSpan.FromSeconds(10),
-                TopologyRecoveryEnabled = true,
+                // Connections and channels are recovered by LinkConnection / LinkChannel.
+                // Client auto recovery races with it and leaves channels bound to disposed connections.
+                AutomaticRecoveryEnabled = false,
+                TopologyRecoveryEnabled = false,
                 RequestedHeartbeat = TimeSpan.FromSeconds(60),
                 DispatchConsumersAsync = true,
                 SocketReadTimeout = TimeSpan.FromSeconds(15),

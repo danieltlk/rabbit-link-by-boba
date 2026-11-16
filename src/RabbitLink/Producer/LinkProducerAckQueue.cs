@@ -70,6 +70,18 @@ namespace RabbitLink.Producer
             item?.Message?.TrySetException(new LinkMessageReturnedException(reason));
         }
 
+        public void Cancel(string correlationId)
+        {
+            Item item;
+
+            lock (_sync)
+            {
+                item = TakeItem(correlationId);
+            }
+
+            item?.Message?.TrySetCanceled(item.Message.Cancellation);
+        }
+
         public void Ack(ulong seq, bool multiple)
         {
             var items = TakeItems(seq, multiple);

@@ -12,6 +12,9 @@ namespace RabbitLink.FunctionalTests
     {
         public static string ConnectionString { get; } = "amqp://localhost";
 
+        public static string ManagementUrl { get; } = "http://localhost:15672/";
+        public static string ManagementCredentials { get; } = "guest:guest";
+
         public static string TestExchangeName => $"link.test.{Guid.NewGuid():D}.exchange";
         public static string TestQueueName => $"link.test.{Guid.NewGuid():D}.queue";
 
